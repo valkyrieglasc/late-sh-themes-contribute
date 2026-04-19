@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use late_core::{
     MutexRecover,
-    models::{chat_message::ChatMessage, chat_room::ChatRoom},
+    models::{article::NEWS_MARKER, chat_message::ChatMessage, chat_room::ChatRoom},
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -298,12 +298,13 @@ impl ChatState {
         self.selected_message_id = None;
     }
 
-    pub fn begin_reply_to_selected_in_room(&mut self, room_id: Uuid) -> bool {
-        let Some(message) = self.selected_message_in_room(room_id) else {
-            return false;
-        };
+    pub fn begin_reply_to_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        let message = self.selected_message_in_room(room_id)?;
         let message_user_id = message.user_id;
         let message_body = message.body.clone();
+        if is_news_announcement_message(&message_body) {
+            return Some(Banner::error("Reply is disabled for news posts"));
+        }
         let author = self
             .usernames
             .get(&message_user_id)
@@ -318,7 +319,7 @@ impl ChatState {
         self.composing = true;
         self.composer_room_id = Some(room_id);
         self.edited_message_id = None;
-        true
+        None
     }
 
     pub fn begin_edit_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
@@ -1524,6 +1525,10 @@ fn reply_preview_text(body: &str) -> String {
     }
 }
 
+fn is_news_announcement_message(body: &str) -> bool {
+    body.trim_start().starts_with(NEWS_MARKER)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1637,6 +1642,14 @@ mod tests {
     fn reply_preview_text_uses_message_body_for_nested_replies() {
         let preview = reply_preview_text("> @mat: original message preview\nyou like tetris?");
         assert_eq!(preview, "you like tetris?");
+    }
+
+    #[test]
+    fn news_announcements_are_not_replyable() {
+        assert!(is_news_announcement_message(
+            "---NEWS--- title || summary || url || ascii"
+        ));
+        assert!(!is_news_announcement_message("regular chat message"));
     }
 
     // --- parse_dm_command ---
