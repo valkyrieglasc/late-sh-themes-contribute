@@ -18,18 +18,17 @@ mod ws;
 
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
-use identity::ensure_client_identity;
-use pty::forward_resize_events;
+use identity::ensure_client_identity_at;
 use raw_mode::RawModeGuard;
-use ssh::{SshExit, SshProcess, flush_stdin_input_queue, spawn_ssh};
-use ws::run_viz_ws;
+use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
+use ws::{PairClientInfo, PlaybackState, client_platform_label, run_viz_ws};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = Config::from_args(env::args().skip(1))?;
     init_logging(config.verbose)?;
     debug!(?config, "resolved cli config");
-    let ssh_identity = ensure_client_identity()?;
+    let ssh_identity = ensure_client_identity_at(config.key_file.as_deref())?;
     let _raw_mode = RawModeGuard::enable_if_tty();
 
     info!("starting audio runtime");
@@ -43,8 +42,7 @@ async fn main() -> Result<()> {
     info!("starting ssh session");
     let (token_tx, token_rx) = oneshot::channel();
     let SshProcess {
-        mut child,
-        mut output_task,
+        completion_task,
         input_task,
         resize_handle,
         input_gate,
@@ -63,26 +61,27 @@ async fn main() -> Result<()> {
     info!("received session token and starting websocket pairing");
 
     let api_base_url = config.api_base_url.clone();
+    let client = PairClientInfo {
+        ssh_mode: config.ssh_mode.client_state_label(),
+        platform: client_platform_label(),
+    };
     let played_samples = Arc::clone(&audio.played_samples);
-    let sample_rate = audio.sample_rate;
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
     let mut frames = audio.analyzer_tx.subscribe();
 
     let ws_task = tokio::spawn(async move {
+        let playback = PlaybackState {
+            played_samples: &played_samples,
+            sample_rate: audio.sample_rate,
+            muted: &muted,
+            volume_percent: &volume_percent,
+        };
         let mut retries = 0;
         const MAX_RETRIES: usize = 10;
         loop {
-            if let Err(err) = run_viz_ws(
-                &api_base_url,
-                &token,
-                &mut frames,
-                &played_samples,
-                sample_rate,
-                &muted,
-                &volume_percent,
-            )
-            .await
+            if let Err(err) =
+                run_viz_ws(&api_base_url, &token, &client, &mut frames, &playback).await
             {
                 retries += 1;
                 if retries > MAX_RETRIES {
@@ -98,56 +97,17 @@ async fn main() -> Result<()> {
         }
     });
 
-    let mut stdout_result = None;
-    let mut stdout_task_consumed = false;
-    let status = match tokio::select! {
-        status = child.wait() => {
-            let status = status.context("ssh process failed to exit cleanly")?;
-            SshExit::Process(status)
-        }
-        stdout = &mut output_task => {
-            stdout_task_consumed = true;
-            match stdout {
-                Ok(Ok(())) => {
-                    info!("ssh stdout closed; treating session as ended");
-                    stdout_result = Some(Ok(Ok(())));
-                }
-                Ok(Err(err)) => return Err(err.context("ssh stdout forwarding failed")),
-                Err(err) => return Err(anyhow::anyhow!("ssh stdout task join failed: {err}")),
-            }
-            SshExit::StdoutClosed
-        }
-    } {
-        SshExit::Process(status) => {
-            info!(%status, "ssh session exited");
-            Some(status)
-        }
-        SshExit::StdoutClosed => {
-            if let Err(err) = child.start_kill() {
-                debug!(error = ?err, "failed to kill lingering ssh wrapper after stdout closed");
-            }
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
-            None
-        }
+    let ssh_exit = match completion_task.await {
+        Ok(result) => result?,
+        Err(err) => return Err(anyhow::anyhow!("ssh session task join failed: {err}")),
     };
 
     audio.stop.store(true, Ordering::Relaxed);
     resize_task.abort();
     input_task.abort();
     ws_task.abort();
-    if !stdout_task_consumed && output_task.is_finished() {
-        stdout_result = Some(output_task.await);
-    } else if !stdout_task_consumed {
-        output_task.abort();
-        let _ = output_task.await;
-    }
-
-    if let Some(status) = status {
-        let stdout_closed_cleanly = matches!(stdout_result, Some(Ok(Ok(()))));
-        if !(status.success() || status.code() == Some(255) && stdout_closed_cleanly) {
-            anyhow::bail!("ssh exited with status {status}");
-        }
-    }
+    debug!(?ssh_exit, "ssh session ended");
+    ssh_exit.ensure_success()?;
 
     Ok(())
 }
