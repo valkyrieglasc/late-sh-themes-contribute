@@ -11,7 +11,7 @@ use super::data::{CountryOption, filter_countries, filter_timezones};
 use super::ui::bio_text_width;
 
 const USERNAME_MAX_LEN: usize = 12;
-const BIO_MAX_LEN: usize = 280;
+pub const BIO_MAX_LEN: usize = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PickerKind {
