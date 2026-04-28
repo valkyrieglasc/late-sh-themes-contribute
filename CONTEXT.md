@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Terminal Clubhouse for Developers
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-04-28 (Rooms moderator entry)
+- Last updated: 2026-04-28 (Chat refresh defuse context)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -782,6 +782,8 @@ late-sh/
 ## 6. Current Work [VOLATILE]
 
 In progress:
+- **Chat refresh defuse (active branch context):** Production hit ~3.8GB `service-ssh` memory after DB-pool refresh storms. The smoking gun was per-PTY `list_chat_rooms` refresh work: every SSH chat state ran the same heavy 10s room snapshot path, holding one of 16 DB pool slots while doing many sequential queries. Around the incident window, traces/logs showed many `list_chat_rooms` spans in the ~450-900ms range plus `chat service refresh failed` / pool timeout errors. Runtime RSS was almost entirely private anonymous heap and stayed high after the burst, consistent with burst allocations plus allocator retention. The current defuse direction is: cache global chat data, move scheduled refresh to a single service-owned scheduler, publish per-session snapshots through per-session receivers, add refresh jitter/deduping/force-refresh paths carefully, and use `jemalloc` as cheap allocator insurance. Treat allocator changes as mitigation only; the root cause is chat refresh fanout and over-broad snapshot work.
+- **Chat cleanup target:** The current chat service boundary is too broad. Do not keep treating "hydrate the whole chat UI" as the normal polling primitive. Split it into: (1) global chat cache (`usernames`, `countries`, `bonsai_glyphs`, discover/public-room metadata) refreshed once every 30-60s; (2) per-user room summary (`joined rooms`, unread counts, favorites, ignored users) refreshed every 10s or on room/user events; (3) per-room message tails fetched on active room switch, dashboard-visible rooms, send/edit/delete/reaction, or delta recovery. Events should patch local state cheaply (`MessageCreated` append, reaction update patch, room join/leave invalidate room summary) rather than forcing full snapshots.
 - Rooms is now the primary multiplayer table-game entry point (`Screen::Rooms`, key `4`).
 - `RoomsService` can create persistent Blackjack tables in `game_rooms` while also creating/associating a `chat_rooms(kind='game')` row in one SQL CTE. Room creation publishes a snapshot refresh plus `RoomsEvent` success/error.
 - Rooms page supports selecting rows, admin-only room creation, admin/mod room entry, and returning to the list with `Esc`. Active room mode is a dedicated input-capture surface: after modals and global `Ctrl-O`, events are consumed by the game/room and do not leak to app-wide hotkeys (`w`, `P`, `?`, `1-5`, `Tab`, etc.).
@@ -900,13 +902,16 @@ An always-running game where every connected SSH session is automatically a part
 - Events (coffee breaks, AMAs, mini coding jams)
 - Personalization (accent color, favorite vibe, custom tagline)
 
-### Global-cache for cross-user chat data (future)
+### Chat service cleanup / global-cache split (active follow-up)
 
-`ChatService::start_user_refresh_task` polls `list_chat_rooms` every 10s per SSH session. That method currently mixes per-user reads (rooms, unread counts, selected-room tail, ignore list) with two genuinely global reads: `User::list_all_username_map` (mention autocomplete) and `Tree::list_all` (bonsai glyphs for other users' chat lines). With N online users, both global queries run N times every 10s for identical results.
+The old per-session `list_chat_rooms` refresh path mixed global data, per-user room summaries, and per-room message tails into one heavy polling unit. That shape caused DB pool pressure and memory spikes when many PTYs refreshed together. Keep the emergency defuse, but the durable design is a real split:
 
-Pattern to steal: `LeaderboardService` — singleton background task refreshes a shared `watch::Receiver<Arc<_>>` on a fixed interval; per-user code reads the cache instead of hitting DB. Applied here, a new `ChatGlobalsService` (or similar) would publish `{ all_usernames, bonsai_glyphs }` every 10s, `list_chat_rooms` would consume the cache, and the per-user query list would shrink to only the genuinely per-user joins.
+- **Global cache:** `usernames`, `countries`, `bonsai_glyphs`, discover/public room metadata. One service-owned task refreshes this every 30-60s and shares it as `Arc` data.
+- **Per-user summary:** joined rooms, unread counts, favorite room IDs, ignored user IDs. This is the normal 10s recovery poll and should be much cheaper than a full chat UI hydration.
+- **Per-room tails:** active room, dashboard-visible room(s), and rooms touched by send/edit/delete/reaction/delta. Do not re-fetch large histories for every joined/pinned room on every steady-state tick.
+- **Events as patches:** broadcasts should append/update/delete local state and invalidate the smallest relevant cache, not trigger whole-chat refetches by default.
 
-Not urgent at today's user count — the per-user refresh remains load-bearing for dropped-broadcast-event recovery (lagged `MessageCreated`/`MessageEdited`), so the task itself stays either way; only the two global queries move out.
+The refresh task itself remains load-bearing for dropped broadcast recovery (`MessageCreated` / `MessageEdited` lag), but it must not be the unit that rebuilds the whole chat application state for every user.
 
 ### Multi-replica readiness (future)
 
@@ -1071,13 +1076,13 @@ Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI
 - With `HISTORY_LIMIT = 1000` (`late-ssh/src/app/chat/svc.rs:22`), the active room's full transcript can be re-hashed up to 15 times/sec per session — a steady CPU floor even when nothing changed.
 - **Direction:** cap visible messages much lower (200 is plenty for a TUI viewport), and/or maintain the fingerprint incrementally (`(last_msg_id, last_msg_updated_at, len, badge_version, glyph_version)`) instead of full re-hash.
 
-### C. `ChatSnapshot` is a single global watch channel + per-user payload → quadratic clone storm
+### C. `ChatSnapshot` global watch + per-user payload caused quadratic clone storm
 - `ChatService` holds **one** `watch::Sender<ChatSnapshot>` (`late-ssh/src/app/chat/svc.rs:155`). Every session's refresh task publishes its own per-user snapshot into it (`late-ssh/src/app/chat/svc.rs:240`), ~6 publishes/sec at 60 users.
 - `drain_snapshot` (`late-ssh/src/app/chat/state.rs:1128`) clones the **entire** snapshot first, then discards it if `snapshot.user_id != self.user_id`. 59/60 of those clones are pure waste.
 - The cloned payload is huge: rooms `Vec<(ChatRoom, Vec<ChatMessage>)>` (general up to 1000 msgs + selected room up to 1000), `usernames` HashMap, `bonsai_glyphs` HashMap, `all_usernames` Vec.
 - The clone runs under the per-session render mutex, so it directly extends item A's lock-hold time.
-- **Cheap interim:** peek `borrow().user_id` first, only clone if it matches the receiver.
-- **Real fix:** the `ChatGlobalsService` split already proposed in §7 — global maps in their own `watch<Arc<…>>`, per-user state in per-user channels (mirror `ProfileService`'s per-user-keyed senders).
+- **Defuse branch note:** moving scheduled refresh output to per-session snapshot receivers fixes the "last user wins" / wasted clone shape for the periodic refresh path. Keep legacy/global `subscribe_state()` only for explicit service-list tests or transitional callers; new UI state should prefer per-session receivers.
+- **Real fix:** the chat service cleanup split in §7 — global maps in their own `watch<Arc<...>>`, per-user state in per-user channels, and message tails as their own cache/update domain.
 
 ### D. Per-user 10s refresh does heavy work for everyone, every cycle
 - `list_chat_rooms` (`late-ssh/src/app/chat/svc.rs:179`) runs every 10s per session and unconditionally fetches:
@@ -1092,6 +1097,7 @@ Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI
 - **Constraint learned from dashboard favorites:** do **not** optimize this by guessing hydration from local room state like `messages.is_empty()`. Non-active rooms can receive live `MessageCreated` / `DeltaSynced` events before their historical backlog is ever fetched, so "non-empty" does not mean "fully hydrated". Any future perf cut must preserve a real snapshot/backlog contract for rooms the UI can immediately show (today: active room, `#general`, joined pinned favorites).
 - **Direction:** drop `HISTORY_LIMIT` to ~200 (no human reads back 1000), let general's tail be cached once in `ChatService` (broadcasts already keep it warm), and if needed split "initial/UI-visible preload set" from the steady-state 10s refresh scope. Reduce query volume without reintroducing local-state hydration heuristics.
 - Refresh task itself stays — it's load-bearing for dropped-broadcast recovery (lagged `MessageCreated`/`MessageEdited`); only the global queries and the volume move out.
+- **Defuse branch note:** serializing scheduled session refreshes through one scheduler is an intentional DB-safety tradeoff. It prevents a pool stampede, but if each snapshot takes 450-900ms and many sessions are online, a full pass can exceed the nominal 10s interval. That is acceptable as an emergency defuse because overload becomes "stale/slower chat refresh" instead of "DB pool collapse + heap spike"; the durable follow-up is bounded concurrency plus smaller snapshot units.
 
 ### E. Unread-count query may get painful as message volume grows
 - `ChatRoomMember::unread_counts_for_user` (`late-core/src/models/chat_room_member.rs:99`) LEFT-JOINs `chat_messages` and counts every row newer than `last_read_at` for every membership row. Index `idx_chat_messages_room_created` on `(room_id, created DESC, id DESC)` exists, so plans should use it, but the query still scans all unread rows per room.
@@ -1104,8 +1110,8 @@ Symptom observed at ~60 concurrent SSH sessions: noticeable input lag in the TUI
 ### Suggested order
 1. **A** (input/render lock split) and **B** (cache fingerprint cap/incremental) — pure local changes, immediate user-felt latency win.
 2. **C-cheap** (peek user_id before clone) — one-line patch, biggest CPU cut of the bunch.
-3. **D** (drop HISTORY_LIMIT, stop refetching general per-user) — small change, kills the bulk of PG churn.
-4. **C-real** + **F** (`ChatGlobalsService` split, per-room metadata vs. tail separation) — bigger refactor, removes the N² shape entirely.
+3. **D** (drop HISTORY_LIMIT, stop refetching general per-user, keep scheduler bounded) — small change, kills the bulk of PG churn.
+4. **C-real** + **F** (chat cleanup split: global cache, per-user summary, per-room tails) — bigger refactor, removes the N² shape entirely.
 5. **E** if it shows up in PG profiles after the above.
 
 ### Out of scope of this investigation
