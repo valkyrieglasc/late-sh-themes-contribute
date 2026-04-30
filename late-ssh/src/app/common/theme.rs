@@ -33,6 +33,7 @@ pub enum ThemeKind {
     ENA = 27,
     ENADreamBbq = 28,
     Kirii = 29,
+    Discord = 30,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,10 +46,11 @@ pub enum ThemeGroup {
     MARATHON,
     JoelG,
     Experimental,
+    Social,
 }
 
 impl ThemeGroup {
-    pub const ALL: [ThemeGroup; 8] = [
+    pub const ALL: [ThemeGroup; 9] = [
         ThemeGroup::Core,
         ThemeGroup::Catppuccin,
         ThemeGroup::Coffee,
@@ -57,6 +59,7 @@ impl ThemeGroup {
         ThemeGroup::MARATHON,
         ThemeGroup::JoelG,
         ThemeGroup::Experimental,
+        ThemeGroup::Social,
     ];
 
     pub fn label(self) -> &'static str {
@@ -69,6 +72,7 @@ impl ThemeGroup {
             ThemeGroup::MARATHON => "MARATHON",
             ThemeGroup::JoelG => "Joel G",
             ThemeGroup::Experimental => "Experimental",
+            ThemeGroup::Social => "Social",
         }
     }
 
@@ -310,6 +314,12 @@ pub const OPTIONS: &[ThemeOption] = &[
         group: ThemeGroup::Experimental,
         id: "kirii",
         label: "Kirii",
+    },
+    ThemeOption {
+        kind: ThemeKind::Discord,
+        group: ThemeGroup::Social,
+        id: "discord",
+        label: "Discord",
     },
 ];
 
@@ -1215,6 +1225,36 @@ const PALETTE_KIRII: Palette = Palette {
     badge_gold: Color::Rgb(255, 153, 221),
 };
 
+const PALETTE_DISCORD: Palette = Palette {
+    bg_canvas: Color::Rgb(15, 1, 89),
+    bg_selection: Color::Rgb(88, 101, 242),
+    bg_highlight: Color::Rgb(8, 1, 48),
+    border_dim: Color::Rgb(71, 82, 196),
+    border: Color::Rgb(88, 101, 242),
+    border_active: Color::Rgb(255, 255, 255),
+    text_faint: Color::Rgb(71, 82, 196),
+    text_dim: Color::Rgb(88, 101, 242),
+    text_muted: Color::Rgb(180, 180, 220),
+    text: Color::Rgb(230, 230, 250),
+    text_bright: Color::Rgb(255, 255, 255),
+    amber: Color::Rgb(88, 101, 242),
+    amber_dim: Color::Rgb(71, 82, 196),
+    amber_glow: Color::Rgb(255, 255, 255),
+    chat_body: Color::Rgb(230, 230, 250),
+    chat_author: Color::Rgb(88, 101, 242),
+    mention: Color::Rgb(255, 255, 255),
+    success: Color::Rgb(87, 242, 135),
+    error: Color::Rgb(237, 66, 69),
+    bot: Color::Rgb(88, 101, 242),
+    bonsai_sprout: Color::Rgb(88, 101, 242),
+    bonsai_leaf: Color::Rgb(71, 82, 196),
+    bonsai_canopy: Color::Rgb(8, 1, 48),
+    bonsai_bloom: Color::Rgb(255, 255, 255),
+    badge_bronze: Color::Rgb(71, 82, 196),
+    badge_silver: Color::Rgb(209, 209, 209),
+    badge_gold: Color::Rgb(255, 255, 255),
+};
+
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
 }
@@ -1302,6 +1342,7 @@ fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
         ThemeKind::ENA => &PALETTE_ENA,
         ThemeKind::ENADreamBbq => &PALETTE_ENA_DREAM_BBQ,
         ThemeKind::Kirii => &PALETTE_KIRII,
+        ThemeKind::Discord => &PALETTE_DISCORD,
         ThemeKind::Late => &PALETTE_LATE,
     }
 }
@@ -1483,7 +1524,7 @@ mod tests {
 
     #[test]
     fn cycle_theme_wraps() {
-        assert_eq!(cycle_id("kirii", true), "contrast");
-        assert_eq!(cycle_id("contrast", false), "kirii");
+        assert_eq!(cycle_id("discord", true), "contrast");
+        assert_eq!(cycle_id("contrast", false), "discord");
     }
 }
