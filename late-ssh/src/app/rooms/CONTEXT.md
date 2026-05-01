@@ -68,6 +68,7 @@
 - Slot keying is a two-key prefix: `b1`, `b2`, `b3`. The input path only arms `b` when room showcases are enabled and at least one Blackjack room exists.
 - `dashboard/input.rs::enter_blackjack_room_slot` delegates to `rooms::input::enter_room`, then switches to `Screen::Rooms`, so table touch, chat join/tail load, and Blackjack runtime setup are shared with the directory path.
 - Backtick toggles Dashboard <-> the last active game target. Room-backed tables set the target to `DashboardGameToggleTarget::Room`; Arcade games under `late-ssh/src/app/games` set it to `DashboardGameToggleTarget::Arcade`. `rooms::input::enter_room` records `App.rooms_last_active_room_id`; Dashboard resolves room targets against the current `RoomsSnapshot`, while active-room backtick returns to Dashboard without clearing `rooms_active_room`.
+- Direct global screen jump `4` opens the Rooms directory, not the active room. It clears `App.rooms_active_room` but keeps `rooms_last_active_room_id`, so backtick remains the way to return to the last game room.
 
 ## Blackjack Table Runtime
 - `BlackjackTableManager` is process-local. It lazily maps each entered `GameRoom.id` to a `BlackjackService`.
