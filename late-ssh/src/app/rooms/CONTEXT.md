@@ -44,15 +44,16 @@
 - `rooms_selected_index` counts only visible real rooms.
 - `state.rs::visible_real_rooms_count` and `input.rs::visible_real_count`/`visible_real_room_at` intentionally duplicate the same filter/search predicate. Change them together.
 - Wide directory layout starts at `NARROW_WIDTH = 80` and renders a columned table. Narrow layout renders two-line cards.
-- Directory handlers support `j/k` and up/down arrows to navigate, `h/l` and left/right arrows to filter, `/` to search, `n` to create, `d` to delete, and `Enter` to enter. The rendered footer is role-aware: `n`/`d` show only for admins, and `Esc` shows only for admins/mods.
+- Directory handlers support `j/k` and up/down arrows to navigate, `h/l` and left/right arrows to filter, `/` to search, `n` to create, `d` to delete, and `Enter` to enter. The rendered footer is role-aware: `n` always shows, `d` shows only for admins, and `Esc` shows only for admins/mods.
 - In the idle directory, `Tab`, `Shift+Tab`, and number keys remain global screen navigation, not Rooms filter shortcuts. The create modal consumes `Tab`/`BackTab` for field focus, and active-room input is intercepted before global screen switching.
 - Directory `Esc` peels state in this order: create form -> active search -> search query -> non-All filter -> active room/list exit. Active rooms bypass that directory escape path: `Esc` first clears embedded chat selection when present, then routes to the game and may leave the room.
 - Create/search input limits: room name max 48 chars, search query max 32 chars, default create names come from `RoomGameRegistry`, and pasted text is passed through paste-marker sanitization.
 
 ## Access Policy
-- Room creation and deletion are admin-only in `input.rs`.
+- Room creation is open to every user. The 3-non-closed-tables-per-creator-per-game-kind cap is enforced server-side in `RoomsService::create_game_room`; over-cap attempts surface to the client via `RoomsEvent::Error` (banner). There is no client-side `can_create_room` gate anymore.
+- Room deletion is admin-only in `input.rs` (`can_delete_room`).
 - Room entry is currently open to every user: `can_enter_room` returns `true` for admin, mod, and ordinary users. Older root-context notes that only admins/mods can enter are stale.
-- Create modal lets admins pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Tic-Tac-Toe uses empty JSON settings.
+- Create modal lets any user pick a real game kind. Blackjack-specific pace/stake fields render only when Blackjack is selected; Tic-Tac-Toe uses empty JSON settings.
 
 ## Active Room and Chat
 - Entering a room calls:

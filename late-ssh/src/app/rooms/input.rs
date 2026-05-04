@@ -241,14 +241,6 @@ fn submit_create_modal(
     display_name: String,
     settings: serde_json::Value,
 ) {
-    if !can_create_room(app.is_admin) {
-        app.banner = Some(Banner::error(
-            "Admin only: creating rooms is locked for now.",
-        ));
-        app.rooms_create_flow = None;
-        return;
-    }
-
     let display_name = display_name.trim().to_string();
     if display_name.is_empty() {
         app.banner = Some(Banner::error("Table name is required."));
@@ -274,12 +266,6 @@ fn submit_create_modal(
 }
 
 fn open_create_picker(app: &mut App) {
-    if !can_create_room(app.is_admin) {
-        app.banner = Some(Banner::error(
-            "Admin only: creating rooms is locked for now.",
-        ));
-        return;
-    }
     app.rooms_create_flow = Some(CreateRoomFlow::Picker { kind_index: 0 });
 }
 
@@ -583,10 +569,6 @@ fn should_route_active_room_chat_key(app: &App, chat_room_id: uuid::Uuid, byte: 
         )
 }
 
-fn can_create_room(is_admin: bool) -> bool {
-    is_admin
-}
-
 fn can_delete_room(is_admin: bool) -> bool {
     is_admin
 }
@@ -598,13 +580,7 @@ fn can_enter_room(is_admin: bool, is_moderator: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{can_create_room, can_delete_room, can_enter_room};
-
-    #[test]
-    fn room_creation_stays_admin_only() {
-        assert!(can_create_room(true));
-        assert!(!can_create_room(false));
-    }
+    use super::{can_delete_room, can_enter_room};
 
     #[test]
     fn room_deletion_stays_admin_only() {

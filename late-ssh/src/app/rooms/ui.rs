@@ -493,13 +493,8 @@ fn draw_empty_state(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
         Style::default().fg(theme::TEXT_MUTED()),
     )));
 
-    let hint = if view.is_admin {
-        "Press n to create the first one."
-    } else {
-        "Ask an admin to spin one up."
-    };
     lines.push(Line::from(Span::styled(
-        hint,
+        "Press n to create the first one.",
         Style::default().fg(theme::TEXT_DIM()),
     )));
 
@@ -519,11 +514,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, view: &RoomsPageView<'_>) {
         hint_pair("h/l", "filter"),
         Span::raw(" · "),
         hint_pair("/", "search"),
+        Span::raw(" · "),
+        hint_pair("n", "new"),
     ];
 
     if view.is_admin {
-        spans.push(Span::raw(" · "));
-        spans.push(hint_pair("n", "new"));
         spans.push(Span::raw(" · "));
         spans.push(hint_pair("d", "delete"));
     }
